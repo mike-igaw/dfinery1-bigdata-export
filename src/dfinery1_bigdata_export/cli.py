@@ -192,14 +192,22 @@ def create_export(headers: dict, template: dict, appkey: str, target_date: datet
 
     new_name = f"{base_name} - {date_str}"
 
-    payload = {k: v for k, v in template.items() if k not in _EXCLUDE_FROM_CREATE}
-    payload["name"] = new_name
-    payload["appkey"] = appkey
-    if "sql_param" in payload:
-        sql_param = dict(payload["sql_param"])
-        sql_param["begin_date"] = begin
-        sql_param["end_date"] = end
-        payload["sql_param"] = sql_param
+    payload = {
+        "name": new_name,
+        "appkey": appkey,
+        "sql_type": template.get("sql_type", "brixport_event"),
+        "sql_param": dict(template.get("sql_param", {})),
+        "export_param": {
+            "strategy": template.get("export_param", {}).get("strategy", {
+                "strategy_type": "none",
+                "strategy_number": 100000,
+            }),
+            "emails": [],
+            "email_locale": "KO",
+        },
+    }
+    payload["sql_param"]["begin_date"] = begin
+    payload["sql_param"]["end_date"] = end
 
     resp = requests.post(f"{API_BASE}/api/v1/DataStudio/Export/RawData/Create",
                          headers=headers, json=payload, timeout=30)
@@ -257,14 +265,23 @@ def download_export(headers: dict, raw_data_id: str, export_name: str,
                                 "s3_url": s3_url, "is_json_req": True}],
                          timeout=60)
     resp.raise_for_status()
-    result = _parse(resp.json())
+    data = resp.json()
+    result = data.get("data", data.get("result", {}))
 
-    if isinstance(result, list) and result:
+    # 응답 형식: {"data": {"urls": ["https://s3..."]}}
+    if isinstance(result, dict) and "urls" in result:
+        urls = result["urls"]
+        url = urls[0] if urls else ""
+    elif isinstance(result, list) and result:
         url = result[0].get("download_url", result[0].get("url", ""))
     elif isinstance(result, dict):
         url = result.get("download_url", result.get("url", ""))
     else:
         url = str(result)
+
+    if not url:
+        print("[ERROR] 다운로드 URL을 받지 못했습니다.")
+        sys.exit(1)
 
     # 파일 다운로드
     resp = requests.get(url, stream=True, timeout=120)
